@@ -1,12 +1,13 @@
 import uvicorn
 from fastapi import FastAPI
-from app.api.api_v1.endpoints import user, item
+from app.api.api_v1.endpoints import user, item, bedrock
 
-app = FastAPI(title="My Fullstack App")
+app = FastAPI(title="We Go AWS")
 
 # 엔드포인트 등록
 app.include_router(user.router, prefix="/users", tags=["Users"])
 app.include_router(item.router, prefix="/items", tags=["Items"])
+app.include_router(bedrock.router, prefix="/bedrock", tags=["Bedrock"])
 
 @app.get("/")
 def root():
