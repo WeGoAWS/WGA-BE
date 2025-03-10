@@ -1,2 +1,10 @@
 fastapi
 uvicorn
+pydantic-settings
+python-dotenv
+sqlalchemy
+psycopg2-binary
+alembic
+pytest
+requests
+httpx
