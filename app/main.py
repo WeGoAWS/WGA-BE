@@ -1,12 +1,11 @@
 import uvicorn
 from fastapi import FastAPI
-from app.api.api_v1.endpoints import user, item, bedrock
+from app.api.api_v1.endpoints import user, bedrock
 
 app = FastAPI(title="We Go AWS")
 
 # 엔드포인트 등록
 app.include_router(user.router, prefix="/users", tags=["Users"])
-app.include_router(item.router, prefix="/items", tags=["Items"])
 app.include_router(bedrock.router, prefix="/bedrock", tags=["Bedrock"])
 
 @app.get("/")

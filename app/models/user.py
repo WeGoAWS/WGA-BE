@@ -1,9 +1,14 @@
-from sqlalchemy import Column, Integer, String
-from app.core.database import Base
+from pydantic import BaseModel, Field
+from typing import Optional
 
-class User(Base):
-    __tablename__ = "users"
+class UserCreate(BaseModel):
+    username: str
+    email: str
 
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
-    email = Column(String, unique=True, index=True)
+class User(BaseModel):
+    id: str = Field(alias="_id")  # MongoDB _id를 string으로 변환
+    username: str
+    email: str
+
+    class Config:
+        allow_population_by_field_name = True

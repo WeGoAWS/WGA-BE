@@ -6,7 +6,7 @@ router = APIRouter()
 @router.post("/generate-text")
 def generate_text(input_text: str):
     """
-    bedrock_model_id와 user_input을 받아
+    input_text을 받아
     Bedrock 모델에 인퍼런스를 요청한다.
     """
     result = invoke_bedrock_model(input_text)

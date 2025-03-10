@@ -14,7 +14,6 @@ def invoke_bedrock_model(input_text: str) -> dict:
     """
     Bedrock 모델에 텍스트를 전달하고 결과를 받아오는 함수.
     input_text: 사용자 입력
-    base64_image: 사용자 이미지
     return: 모델의 응답(JSON 형태)
     """
     # Bedrock에 보낼 payload(모델별 요구 포맷이 상이할 수 있음)
