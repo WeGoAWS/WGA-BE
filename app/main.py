@@ -1,8 +1,8 @@
-import os
 import uvicorn
 from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
 from app.api.api_v1.endpoints import user, bedrock, auth
+from app.tests import test
 
 app = FastAPI(title="We Go AWS")
 
@@ -13,6 +13,7 @@ app.add_middleware(SessionMiddleware, secret_key="temporary_secret_key_123456789
 app.include_router(user.router, prefix="/users", tags=["Users"])
 app.include_router(bedrock.router, prefix="/bedrock", tags=["Bedrock"])
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
+app.include_router(test.router, prefix="/test", tags=["Test"])
 
 @app.get("/")
 def root():

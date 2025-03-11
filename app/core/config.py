@@ -15,5 +15,8 @@ class Settings:
     COGNITO_CLIENT_ID: str = os.getenv("COGNITO_CLIENT_ID", "")
     COGNITO_CLIENT_SECRET: str = os.getenv("COGNITO_CLIENT_SECRET", "")
     COGNITO_REDIRECT_URI: str = os.getenv("COGNITO_REDIRECT_URI", "")
+    COGNITO_IDENTITY_POOL_ID: str = os.getenv("COGNITO_IDENTITY_POOL_ID", "")
+    
+    USER_POOL_ID: str = os.getenv("USER_POOL_ID", "")
 
 settings = Settings()
