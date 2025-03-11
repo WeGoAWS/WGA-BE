@@ -11,4 +11,9 @@ class Settings:
     AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
     AWS_REGION: str = os.getenv("AWS_REGION", "us-east-1")
 
+    COGNITO_DOMAIN: str = os.getenv("COGNITO_DOMAIN", "")
+    COGNITO_CLIENT_ID: str = os.getenv("COGNITO_CLIENT_ID", "")
+    COGNITO_CLIENT_SECRET: str = os.getenv("COGNITO_CLIENT_SECRET", "")
+    COGNITO_REDIRECT_URI: str = os.getenv("COGNITO_REDIRECT_URI", "")
+
 settings = Settings()
