@@ -1,4 +1,3 @@
-import httpx
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse, JSONResponse
 from authlib.integrations.starlette_client import OAuth, OAuthError
@@ -33,20 +32,13 @@ async def authorize(request: Request):
     except OAuthError as error:
         raise HTTPException(status_code=400, detail=str(error))
     
-    # token 응답에 id_token이 없다면 access_token을 사용해서 userinfo endpoint를 호출합니다.
     access_token = token.get("access_token")
     if not access_token:
         raise HTTPException(status_code=400, detail="Access token not found in response")
-
-    userinfo_endpoint = oauth.oidc.server_metadata.get("userinfo_endpoint")
-    async with httpx.AsyncClient() as client:
-        r = await client.get(userinfo_endpoint, headers={"Authorization": f"Bearer {access_token}"})
-        if r.status_code != 200:
-            raise HTTPException(status_code=r.status_code, detail="Failed to fetch user info")
-        user = r.json()
     
-    # 세션에 사용자 정보 저장
-    request.session["user"] = dict(user) if user else {}
+    # 세션에 토큰 정보 저장
+    request.session["user_info"] = token.get("userinfo")
+    request.session["id_token"] = token.get("id_token")
     return RedirectResponse(url="/auth/")
 
 @router.get("/logout")
@@ -54,7 +46,8 @@ async def logout(request: Request):
     """
     세션에서 사용자 정보를 삭제하여 로그아웃 처리합니다.
     """
-    request.session.pop("user", None)
+    request.session.pop("user_info")
+    request.session.pop("id_token")
     return RedirectResponse(url="/auth/")
 
 @router.get("/")
@@ -62,7 +55,7 @@ async def index(request: Request):
     """
     현재 로그인 상태에 따라 사용자 정보를 반환하거나 로그인 안내 메시지를 출력합니다.
     """
-    user = request.session.get("user")
-    if user:
-        return JSONResponse({"message": "Logged in", "user": user})
+    user_info = request.session.get("user_info")
+    if user_info:
+        return JSONResponse({"message": "Logged in", "user_info": user_info})
     return JSONResponse({"message": "Hello, please login!"})
