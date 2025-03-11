@@ -1,12 +1,18 @@
+import os
 import uvicorn
 from fastapi import FastAPI
-from app.api.api_v1.endpoints import user, bedrock
+from starlette.middleware.sessions import SessionMiddleware
+from app.api.api_v1.endpoints import user, bedrock, auth
 
 app = FastAPI(title="We Go AWS")
+
+# 세션 미들웨어 추가 (비밀키는 운영 환경에서 안전하게 관리하세요)
+app.add_middleware(SessionMiddleware, secret_key=os.urandom(24))
 
 # 엔드포인트 등록
 app.include_router(user.router, prefix="/users", tags=["Users"])
 app.include_router(bedrock.router, prefix="/bedrock", tags=["Bedrock"])
+app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 
 @app.get("/")
 def root():

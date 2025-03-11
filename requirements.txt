@@ -2,7 +2,6 @@ fastapi
 uvicorn
 pydantic-settings
 python-dotenv
-sqlalchemy
 psycopg2-binary
 alembic
 pytest
@@ -11,3 +10,5 @@ httpx
 boto3
 motor
 python-dotenv
+authlib
+itsdangerous
