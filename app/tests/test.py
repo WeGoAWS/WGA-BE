@@ -1,5 +1,6 @@
 # /tests/test.py
 from fastapi import Request, HTTPException, APIRouter
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from app.services import aws_service
 
@@ -16,7 +17,7 @@ async def test_s3_access(request: Request):
         buckets = s3_client.list_buckets().get("Buckets", [])
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"S3 access error: {str(e)}")
-    return JSONResponse({"S3_Buckets": buckets})
+    return JSONResponse(content=jsonable_encoder({"S3_Buckets": buckets}))
 
 @router.get("/aws/cloudtrail")
 async def test_cloudtrail_access(request: Request):
