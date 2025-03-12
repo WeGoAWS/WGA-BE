@@ -1,4 +1,4 @@
-# /tests/test.py
+# app/tests/test.py
 from fastapi import Request, HTTPException, APIRouter
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse

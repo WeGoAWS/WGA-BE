@@ -1,3 +1,4 @@
+# app/models/auth.py
 from pydantic import BaseModel
 
 # 로그인 요청과 응답 모델 정의

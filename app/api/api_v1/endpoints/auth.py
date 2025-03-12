@@ -1,3 +1,4 @@
+# app/api/api_v1/endpoints/auth.py
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse, JSONResponse
 from authlib.integrations.starlette_client import OAuth, OAuthError
