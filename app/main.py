@@ -1,10 +1,11 @@
+# app/main.py
 import uvicorn
 from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
-from app.api.api_v1.endpoints import user, bedrock, auth, cloudtrail
+from app.api.api_v1.endpoints import user, bedrock, auth, cloudtrail, gcp, azure
 from app.tests import test
 
-app = FastAPI(title="We Go AWS")
+app = FastAPI(title="Multi-Cloud Logs Analysis")
 
 # 세션 미들웨어 추가 (비밀키는 운영 환경에서 안전하게 관리하세요)
 app.add_middleware(SessionMiddleware, secret_key="temporary_secret_key_1234567890")
@@ -15,10 +16,12 @@ app.include_router(bedrock.router, prefix="/bedrock", tags=["Bedrock"])
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(test.router, prefix="/test", tags=["Test"])
 app.include_router(cloudtrail.router, prefix="/cloudtrail", tags=["CloudTrail Logs"])
+app.include_router(gcp.router, prefix="/gcp", tags=["GCP Logs"])
+app.include_router(azure.router, prefix="/azure", tags=["Azure Logs"])
 
 @app.get("/")
 def root():
-    return {"message": "Hello from FastAPI backend!"}
+    return {"message": "Multi-Cloud Logs Analysis API"}
 
 # 애플리케이션 실행
 if __name__ == "__main__":

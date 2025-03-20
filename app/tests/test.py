@@ -1,4 +1,4 @@
-# /tests/test.py
+# app/tests/test.py
 from fastapi import Request, HTTPException, APIRouter
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
@@ -44,3 +44,8 @@ async def test_iam_access(request: Request):
     except Exception as e:
         user_info = f"Error: {str(e)}"
     return JSONResponse({"IAM_User": user_info})
+
+@router.get("/debug-session")
+async def debug_session(request: Request):
+    # 주의: 민감한 정보를 노출할 수 있으므로 개발 환경에서만 사용해야 합니다.
+    return JSONResponse(request.session)

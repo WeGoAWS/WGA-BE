@@ -1,14 +1,28 @@
+# FastAPI 및 웹 서버
 fastapi
 uvicorn
-pydantic-settings
+starlette
 python-dotenv
-psycopg2-binary
-alembic
-pytest
-requests
-httpx
-boto3
-motor
-python-dotenv
+
+# OAuth 및 인증
 authlib
-itsdangerous
+itsdangerous # for SessionMiddleware
+
+# 데이터베이스
+motor
+pymongo
+
+# AWS SDK
+boto3
+
+# GCP SDK
+google-cloud-logging
+google-auth
+
+# Azure SDK
+azure-identity
+azure-monitor-query
+azure-mgmt-resource
+
+# 유틸리티
+pydantic
