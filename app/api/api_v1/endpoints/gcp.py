@@ -3,6 +3,7 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from app.services.gcp_service import get_gcp_client, list_gcp_logs
+from app.core.config import settings
 
 router = APIRouter()
 
