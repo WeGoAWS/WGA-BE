@@ -2,7 +2,7 @@
 import uvicorn
 from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
-from app.api.api_v1.endpoints import user, bedrock, auth, cloudtrail, gcp, azure
+from app.api.api_v1.endpoints import user, bedrock, auth, cloudtrail, gcp, azure, policy_recommendation
 from app.tests import test
 
 app = FastAPI(title="Multi-Cloud Logs Analysis")
@@ -18,6 +18,7 @@ app.include_router(test.router, prefix="/test", tags=["Test"])
 app.include_router(cloudtrail.router, prefix="/cloudtrail", tags=["CloudTrail Logs"])
 app.include_router(gcp.router, prefix="/gcp", tags=["GCP Logs"])
 app.include_router(azure.router, prefix="/azure", tags=["Azure Logs"])
+app.include_router(policy_recommendation.router, prefix="/policy-recommendation", tags=["IAM Policy Recommendations"])
 
 @app.get("/")
 def root():
