@@ -3,10 +3,13 @@ fastapi
 uvicorn
 starlette
 python-dotenv
+httpx
 
 # OAuth 및 인증
 authlib
 itsdangerous # for SessionMiddleware
+python-jose[cryptography] # JWT 토큰 검증
+requests
 
 # 데이터베이스
 motor

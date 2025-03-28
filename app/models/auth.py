@@ -10,3 +10,9 @@ class LoginResponse(BaseModel):
     id_token: str
     access_token: str
     refresh_token: str
+
+class TokenVerifyRequest(BaseModel):
+    id_token: str
+    access_token: str = None
+    refresh_token: str = None
+    provider: str = "cognito"

@@ -4,6 +4,7 @@ from fastapi.responses import RedirectResponse, JSONResponse
 from authlib.integrations.starlette_client import OAuth, OAuthError
 from authlib.integrations.base_client import OAuthError as BaseOAuthError
 from app.core.config import settings
+from app.models.auth import TokenVerifyRequest
 from typing import Optional
 
 router = APIRouter()
@@ -131,3 +132,100 @@ async def refresh_token(request: Request):
     # 실제 구현은 각 제공자의 토큰 갱신 방식에 따라 달라짐
     
     return JSONResponse({"message": "Token refresh not implemented yet"})
+
+@router.post("/verify-token")
+async def verify_token(request: Request, token_data: TokenVerifyRequest):
+    """
+    프론트엔드에서 받은 토큰을 검증하고 유효한 경우 세션에 저장합니다.
+    """
+    if token_data.provider not in ["cognito", "google", "azure"]:
+        raise HTTPException(status_code=400, detail="Unsupported provider")
+    
+    id_token = token_data.id_token
+    
+    try:
+        # 토큰 검증 - AWS Cognito
+        if token_data.provider == "cognito":
+            import boto3
+            from jose import jwk, jwt
+            from jose.utils import base64url_decode
+            import json
+            import time
+            import urllib.request
+            
+            # Cognito 사용자 풀 정보
+            region = settings.AWS_REGION
+            user_pool_id = settings.USER_POOL_ID
+            client_id = settings.COGNITO_CLIENT_ID
+            
+            # JWT 토큰 검증을 위한 공개키 가져오기
+            keys_url = f'https://cognito-idp.{region}.amazonaws.com/{user_pool_id}/.well-known/jwks.json'
+            with urllib.request.urlopen(keys_url) as f:
+                response = f.read()
+            keys = json.loads(response.decode('utf-8'))['keys']
+            
+            # JWT 토큰 헤더 디코딩
+            headers = jwt.get_unverified_headers(id_token)
+            kid = headers['kid']
+            
+            # 검증할 키 찾기
+            key_index = -1
+            for i in range(len(keys)):
+                if kid == keys[i]['kid']:
+                    key_index = i
+                    break
+            if key_index == -1:
+                raise HTTPException(status_code=401, detail='Public key not found in jwks.json')
+            
+            # 공개키 가져오기
+            public_key = jwk.construct(keys[key_index])
+            
+            # 토큰 서명 검증
+            message, encoded_signature = id_token.rsplit('.', 1)
+            decoded_signature = base64url_decode(encoded_signature.encode('utf-8'))
+            
+            # 서명 검증 수행
+            if not public_key.verify(message.encode("utf8"), decoded_signature):
+                raise HTTPException(status_code=401, detail='Signature verification failed')
+            
+            # 클레임 검증
+            claims = jwt.get_unverified_claims(id_token)
+            
+            # 만료 시간 확인
+            if time.time() > claims['exp']:
+                raise HTTPException(status_code=401, detail='Token is expired')
+            
+            # 발행자 확인
+            if claims['iss'] != f'https://cognito-idp.{region}.amazonaws.com/{user_pool_id}':
+                raise HTTPException(status_code=401, detail='Token was not issued by expected provider')
+            
+            # 클라이언트 ID 확인
+            if claims['aud'] != client_id:
+                raise HTTPException(status_code=401, detail='Token was not issued for this client')
+            
+            # 추가 검증 로직은 필요에 따라 여기에 구현
+            
+        # GCP 또는 Azure 토큰 검증 로직도 필요하다면 이곳에 추가
+        
+        # 검증 성공 시 세션에 토큰 저장
+        request.session["id_token"] = id_token
+        if token_data.access_token:
+            request.session["access_token"] = token_data.access_token
+        if token_data.refresh_token:
+            request.session["refresh_token"] = token_data.refresh_token
+        request.session["oauth_provider"] = token_data.provider
+        
+        # 유저 정보 추출
+        if token_data.provider == "cognito":
+            cognito_client = boto3.client('cognito-idp', region_name=settings.AWS_REGION)
+            user_info = cognito_client.get_user(
+                AccessToken=token_data.access_token if token_data.access_token else id_token
+            )
+            request.session["user_info"] = {
+                "username": user_info.get("Username"),
+                "attributes": {attr["Name"]: attr["Value"] for attr in user_info.get("UserAttributes", [])}
+            }
+        
+        return {"status": "success", "message": "Token verified successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Token verification failed: {str(e)}")
