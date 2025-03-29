@@ -1,4 +1,10 @@
 # app/api/api_v1/endpoints/auth.py
+import boto3
+from jose import jwk, jwt
+from jose.utils import base64url_decode
+import json
+import time
+import urllib.request
 from fastapi import APIRouter, Request, HTTPException, Depends, Form
 from fastapi.responses import RedirectResponse, JSONResponse
 from authlib.integrations.starlette_client import OAuth, OAuthError
@@ -146,12 +152,6 @@ async def verify_token(request: Request, token_data: TokenVerifyRequest):
     try:
         # 토큰 검증 - AWS Cognito
         if token_data.provider == "cognito":
-            import boto3
-            from jose import jwk, jwt
-            from jose.utils import base64url_decode
-            import json
-            import time
-            import urllib.request
             
             # Cognito 사용자 풀 정보
             region = settings.AWS_REGION
