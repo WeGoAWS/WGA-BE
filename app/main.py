@@ -10,8 +10,8 @@ from app.tests import test
 app = FastAPI(title="Multi-Cloud Logs Analysis")
 
 # 세션 미들웨어 추가 (비밀키는 운영 환경에서 안전하게 관리하세요)
-app.add_middleware(SessionMiddleware, secret_key="temporary_secret_key_1234567890")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(SessionMiddleware, secret_key="temporary_secret_key_1234567890", max_age=86400)
 
 # 엔드포인트 등록
 app.include_router(user.router, prefix="/users", tags=["Users"])

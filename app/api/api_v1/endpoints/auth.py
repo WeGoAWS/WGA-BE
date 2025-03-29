@@ -144,6 +144,7 @@ async def verify_token(request: Request, token_data: TokenVerifyRequest):
     """
     프론트엔드에서 받은 토큰을 검증하고 유효한 경우 세션에 저장합니다.
     """
+    print(token_data)
     if token_data.provider not in ["cognito", "google", "azure"]:
         raise HTTPException(status_code=400, detail="Unsupported provider")
     
@@ -269,6 +270,10 @@ async def verify_token(request: Request, token_data: TokenVerifyRequest):
             request.session["refresh_token"] = token_data.refresh_token
         request.session["oauth_provider"] = token_data.provider
         
-        return {"status": "success", "message": "Token verified successfully"}
+        response = JSONResponse({"status": "success", "message": "Token verified successfully"})
+
+        print("Response headers:", response.headers)
+    
+        return response
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Token verification failed: {str(e)}")

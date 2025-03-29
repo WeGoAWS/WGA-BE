@@ -273,5 +273,6 @@ async def test_all_services(request: Request):
 
 @router.get("/debug-session")
 async def debug_session(request: Request):
-    # 주의: 민감한 정보를 노출할 수 있으므로 개발 환경에서만 사용해야 합니다.
-    return JSONResponse(request.session)
+    session_id = request.cookies.get('session')
+    print(f"Session ID during debug: {session_id}")
+    return {"session_data": dict(request.session)}
