@@ -144,7 +144,6 @@ async def verify_token(request: Request, token_data: TokenVerifyRequest):
     """
     프론트엔드에서 받은 토큰을 검증하고 유효한 경우 세션에 저장합니다.
     """
-    print(token_data)
     if token_data.provider not in ["cognito", "google", "azure"]:
         raise HTTPException(status_code=400, detail="Unsupported provider")
     
@@ -226,53 +225,19 @@ async def verify_token(request: Request, token_data: TokenVerifyRequest):
                 if claims['aud'] != client_id and claims.get('client_id') != client_id:
                     raise HTTPException(status_code=401, detail='Token was not issued for this client')
                 
-                # ID 토큰에서 직접 사용자 정보 추출
-                # 이제 GetUser API 호출 대신 ID 토큰의 클레임에서 사용자 정보를 가져옵니다
-                user_attributes = {}
-                
-                # 일반적으로 사용되는 Cognito 속성 매핑
-                attribute_mapping = {
-                    "sub": "sub",
-                    "email": "email",
-                    "email_verified": "email_verified",
-                    "username": "cognito:username",
-                    "name": "name",
-                    "given_name": "given_name",
-                    "family_name": "family_name",
-                    "preferred_username": "preferred_username",
-                    "groups": "cognito:groups",
-                    "roles": "cognito:roles"
-                }
-                
-                # 클레임에서 사용자 속성 추출
-                for attr_name, claim_name in attribute_mapping.items():
-                    if claim_name in claims:
-                        user_attributes[attr_name] = claims[claim_name]
-                
-                # 사용자 정보를 세션에 저장
-                request.session["user_info"] = {
-                    "username": claims.get("cognito:username", claims.get("sub")),
-                    "attributes": user_attributes
-                }
-                
             except KeyError as e:
                 raise HTTPException(status_code=401, detail=f'Missing required claim: {str(e)}')
             except Exception as e:
                 raise HTTPException(status_code=401, detail=f'Error validating claims: {str(e)}')
             
         # GCP 또는 Azure 토큰 검증 로직도 필요하다면 이곳에 추가
-        
+
         # 검증 성공 시 세션에 토큰 저장
+        request.session.clear()  # 기존 세션 데이터 모두 삭제
         request.session["id_token"] = id_token
-        if token_data.access_token:
-            request.session["access_token"] = token_data.access_token
-        if token_data.refresh_token:
-            request.session["refresh_token"] = token_data.refresh_token
         request.session["oauth_provider"] = token_data.provider
         
         response = JSONResponse({"status": "success", "message": "Token verified successfully"})
-
-        print("Response headers:", response.headers)
     
         return response
     except Exception as e:
