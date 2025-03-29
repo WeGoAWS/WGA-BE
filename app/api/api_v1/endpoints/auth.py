@@ -152,7 +152,6 @@ async def verify_token(request: Request, token_data: TokenVerifyRequest):
     try:
         # 토큰 검증 - AWS Cognito
         if token_data.provider == "cognito":
-            
             # Cognito 사용자 풀 정보
             region = settings.AWS_REGION
             user_pool_id = settings.USER_POOL_ID
@@ -160,13 +159,20 @@ async def verify_token(request: Request, token_data: TokenVerifyRequest):
             
             # JWT 토큰 검증을 위한 공개키 가져오기
             keys_url = f'https://cognito-idp.{region}.amazonaws.com/{user_pool_id}/.well-known/jwks.json'
-            with urllib.request.urlopen(keys_url) as f:
-                response = f.read()
-            keys = json.loads(response.decode('utf-8'))['keys']
+            
+            try:
+                with urllib.request.urlopen(keys_url) as f:
+                    response = f.read()
+                keys = json.loads(response.decode('utf-8'))['keys']
+            except Exception as e:
+                raise HTTPException(status_code=401, detail=f'Failed to fetch JWKS: {str(e)}')
             
             # JWT 토큰 헤더 디코딩
-            headers = jwt.get_unverified_headers(id_token)
-            kid = headers['kid']
+            try:
+                headers = jwt.get_unverified_headers(id_token)
+                kid = headers['kid']
+            except Exception as e:
+                raise HTTPException(status_code=401, detail=f'Invalid JWT headers: {str(e)}')
             
             # 검증할 키 찾기
             key_index = -1
@@ -174,36 +180,84 @@ async def verify_token(request: Request, token_data: TokenVerifyRequest):
                 if kid == keys[i]['kid']:
                     key_index = i
                     break
+            
             if key_index == -1:
                 raise HTTPException(status_code=401, detail='Public key not found in jwks.json')
             
             # 공개키 가져오기
-            public_key = jwk.construct(keys[key_index])
+            try:
+                public_key = jwk.construct(keys[key_index])
+            except Exception as e:
+                raise HTTPException(status_code=401, detail=f'Failed to construct public key: {str(e)}')
             
             # 토큰 서명 검증
-            message, encoded_signature = id_token.rsplit('.', 1)
-            decoded_signature = base64url_decode(encoded_signature.encode('utf-8'))
-            
-            # 서명 검증 수행
-            if not public_key.verify(message.encode("utf8"), decoded_signature):
-                raise HTTPException(status_code=401, detail='Signature verification failed')
+            try:
+                message, encoded_signature = id_token.rsplit('.', 1)
+                decoded_signature = base64url_decode(encoded_signature.encode('utf-8'))
+                
+                # 서명 검증 수행
+                is_verified = public_key.verify(message.encode("utf8"), decoded_signature)
+                
+                if not is_verified:
+                    raise HTTPException(status_code=401, detail='Signature verification failed')
+            except Exception as e:
+                raise HTTPException(status_code=401, detail=f'Signature verification error: {str(e)}')
             
             # 클레임 검증
-            claims = jwt.get_unverified_claims(id_token)
-            
-            # 만료 시간 확인
-            if time.time() > claims['exp']:
-                raise HTTPException(status_code=401, detail='Token is expired')
-            
-            # 발행자 확인
-            if claims['iss'] != f'https://cognito-idp.{region}.amazonaws.com/{user_pool_id}':
-                raise HTTPException(status_code=401, detail='Token was not issued by expected provider')
-            
-            # 클라이언트 ID 확인
-            if claims['aud'] != client_id:
-                raise HTTPException(status_code=401, detail='Token was not issued for this client')
-            
-            # 추가 검증 로직은 필요에 따라 여기에 구현
+            try:
+                claims = jwt.get_unverified_claims(id_token)
+                
+                # 만료 시간 확인
+                current_time = time.time()
+                expiration_time = claims['exp']
+                
+                if current_time > expiration_time:
+                    raise HTTPException(status_code=401, detail='Token is expired')
+                
+                # 발행자 확인
+                expected_issuer = f'https://cognito-idp.{region}.amazonaws.com/{user_pool_id}'
+                actual_issuer = claims['iss']
+                
+                if actual_issuer != expected_issuer:
+                    raise HTTPException(status_code=401, detail='Token was not issued by expected provider')
+                
+                # 클라이언트 ID 확인
+                if claims['aud'] != client_id and claims.get('client_id') != client_id:
+                    raise HTTPException(status_code=401, detail='Token was not issued for this client')
+                
+                # ID 토큰에서 직접 사용자 정보 추출
+                # 이제 GetUser API 호출 대신 ID 토큰의 클레임에서 사용자 정보를 가져옵니다
+                user_attributes = {}
+                
+                # 일반적으로 사용되는 Cognito 속성 매핑
+                attribute_mapping = {
+                    "sub": "sub",
+                    "email": "email",
+                    "email_verified": "email_verified",
+                    "username": "cognito:username",
+                    "name": "name",
+                    "given_name": "given_name",
+                    "family_name": "family_name",
+                    "preferred_username": "preferred_username",
+                    "groups": "cognito:groups",
+                    "roles": "cognito:roles"
+                }
+                
+                # 클레임에서 사용자 속성 추출
+                for attr_name, claim_name in attribute_mapping.items():
+                    if claim_name in claims:
+                        user_attributes[attr_name] = claims[claim_name]
+                
+                # 사용자 정보를 세션에 저장
+                request.session["user_info"] = {
+                    "username": claims.get("cognito:username", claims.get("sub")),
+                    "attributes": user_attributes
+                }
+                
+            except KeyError as e:
+                raise HTTPException(status_code=401, detail=f'Missing required claim: {str(e)}')
+            except Exception as e:
+                raise HTTPException(status_code=401, detail=f'Error validating claims: {str(e)}')
             
         # GCP 또는 Azure 토큰 검증 로직도 필요하다면 이곳에 추가
         
@@ -214,17 +268,6 @@ async def verify_token(request: Request, token_data: TokenVerifyRequest):
         if token_data.refresh_token:
             request.session["refresh_token"] = token_data.refresh_token
         request.session["oauth_provider"] = token_data.provider
-        
-        # 유저 정보 추출
-        if token_data.provider == "cognito":
-            cognito_client = boto3.client('cognito-idp', region_name=settings.AWS_REGION)
-            user_info = cognito_client.get_user(
-                AccessToken=token_data.access_token if token_data.access_token else id_token
-            )
-            request.session["user_info"] = {
-                "username": user_info.get("Username"),
-                "attributes": {attr["Name"]: attr["Value"] for attr in user_info.get("UserAttributes", [])}
-            }
         
         return {"status": "success", "message": "Token verified successfully"}
     except Exception as e:
