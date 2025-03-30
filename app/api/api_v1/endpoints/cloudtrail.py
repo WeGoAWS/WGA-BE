@@ -45,7 +45,7 @@ async def analyze_cloudtrail_logs(request: Request):
 
     # process_logs 함수를 호출하여 로그 분석 진행 및 결과 S3 업로드
     try:
-        result = process_logs(s3_bucket)
+        result = process_logs(id_token, s3_bucket)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"로그 분석 실패: {str(e)}")
     return JSONResponse(content=jsonable_encoder({

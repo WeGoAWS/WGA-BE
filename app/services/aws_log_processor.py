@@ -14,6 +14,8 @@ from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 import shutil
 from datetime import datetime, timedelta
+from app.services.aws_service import get_aws_session
+import gzip
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 # LLM 구성
@@ -78,13 +80,13 @@ log_analysis_chain = log_analysis_prompt | ollama_llm
 policy_analysis_chain = policy_prompt | ollama_llm
 
 # FAISS 벡터스토어 로드
-def load_action_vectorstore(s3_bucket="wga-faiss-index", s3_prefix="", local_dir="/tmp/faiss_index"):
-    s3 = boto3.client("s3")
+def load_action_vectorstore(id_token, s3_bucket="wga-faiss-index", s3_prefix="", local_dir="/tmp/faiss_index"):
+    s3 = get_aws_session(id_token).client("s3")
     if os.path.exists(local_dir):
         shutil.rmtree(local_dir)
     os.makedirs(local_dir, exist_ok=True)
     
-    response = s3.list_objects_v2(Bucket=s3_bucket, Prefix=s3_prefix)
+    response = s3.list_objects_v2(Bucket=s3_bucket)
 
     for obj in response.get("Contents", []):
         key = obj["Key"]
@@ -98,9 +100,9 @@ def load_action_vectorstore(s3_bucket="wga-faiss-index", s3_prefix="", local_dir
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     return FAISS.load_local(local_dir, embeddings, allow_dangerous_deserialization=True)
 
-def parsing_key(s3_bucket: str, region: str = "us-east-1") -> list[str]:
-    s3 = boto3.client("s3")
-    sts = boto3.client("sts")
+def parsing_key(id_token, s3_bucket: str, region: str = "us-east-1") -> list[str]:
+    s3 = get_aws_session(id_token).client("s3")
+    sts = get_aws_session(id_token).client("sts")
 
     account_id = sts.get_caller_identity()["Account"]
 
@@ -223,8 +225,8 @@ def analyze_policy(logs, action_vectorstore=None):
         return {"REMOVE": [], "ADD": [], "Reason": "Policy analysis failed."}
 
 # S3에서 로그 파일 다운로드
-def download_logs(bucket_name, object_key, local_file_path):
-    s3 = boto3.client('s3')
+def download_logs(id_token, bucket_name, object_key, local_file_path):
+    s3 = get_aws_session(id_token).client("s3")
     try:
         s3.download_file(bucket_name, object_key, local_file_path)
         logging.info(f"Downloaded {object_key} from {bucket_name} to {local_file_path}")
@@ -233,8 +235,8 @@ def download_logs(bucket_name, object_key, local_file_path):
         raise
 
 # S3에 분석 결과 업로드
-def upload_analysis(bucket_name, object_key, analysis_results):
-    s3 = boto3.client('s3')
+def upload_analysis(id_token, bucket_name, object_key, analysis_results):
+    s3 = get_aws_session(id_token).client("s3")
     try:
         s3.put_object(Bucket=bucket_name, Key=object_key, Body=json.dumps(analysis_results, indent=4))
         logging.info(f"Uploaded analysis results to {bucket_name}/{object_key}")
@@ -242,20 +244,34 @@ def upload_analysis(bucket_name, object_key, analysis_results):
         logging.error(f"Error uploading to {bucket_name}/{object_key}: {e}")
         raise
     
-def process_logs(s3_buckets):
+def process_logs(id_token, s3_buckets):
     all_logs = []
     output_bucket = "wga-outputbucket"
     output_key = f"results/{(datetime.utcnow().date() - timedelta(days=1)).isoformat()}-analysis.json"
-    action_vectorstore=load_action_vectorstore()
+    action_vectorstore=load_action_vectorstore(id_token)
 
     for s3_bucket in s3_buckets:
-        s3_keys = parsing_key(s3_bucket)
-        for s3_key in s3_keys:
+        s3_keys = parsing_key(id_token, s3_bucket)
+        for i in range(10):
+            s3_key = s3_keys[i]
             local_file_path = f"/tmp/{os.path.basename(s3_key)}"
-            download_logs(s3_bucket, s3_key, local_file_path)
-            with open(local_file_path, 'r', encoding='utf-8') as f:
-                logs = json.load(f)
-                all_logs.extend(logs)
+            download_logs(id_token, s3_bucket, s3_key, local_file_path)
+            magic = None
+            with open(local_file_path, 'rb') as f:
+                magic = f.read(2)
+
+            if magic == b'\x1f\x8b':
+                with gzip.open(local_file_path, 'rt', encoding='utf-8') as f:
+                    logs = json.load(f)
+                    if isinstance(logs, dict) and "Records" in logs:
+                        logs = logs["Records"]
+                    all_logs.extend(logs)
+            else:
+                with open(local_file_path, 'r', encoding='utf-8') as f:
+                    logs = json.load(f)
+                    if isinstance(logs, dict) and "Records" in logs:
+                        logs = logs["Records"]
+                    all_logs.extend(logs)
             os.remove(local_file_path)  
     logging.info(f"총 로그 수: {len(all_logs)}")
 
@@ -298,5 +314,5 @@ def process_logs(s3_buckets):
             "risk_level": full_day_summary["risk"]
         })
 
-    upload_analysis(output_bucket, output_key, analysis_results)
+    upload_analysis(id_token, output_bucket, output_key, analysis_results)
     return analysis_results

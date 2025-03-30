@@ -27,7 +27,7 @@ async def test_s3_access(request: Request):
     s3_client = session.client("s3")
     
     # 특정 CloudTrail 버킷에만 접근 테스트
-    cloudtrail_bucket = "aws-cloudtrail-logs-248189903808-6efbc744"
+    cloudtrail_bucket = "wga-faiss-index"
     
     results = {
         "bucket_name": cloudtrail_bucket,
