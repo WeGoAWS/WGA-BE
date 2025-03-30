@@ -252,7 +252,7 @@ def process_logs(id_token, s3_buckets):
 
     for s3_bucket in s3_buckets:
         s3_keys = parsing_key(id_token, s3_bucket)
-        for i in range(10):
+        for i in range(2):
             s3_key = s3_keys[i]
             local_file_path = f"/tmp/{os.path.basename(s3_key)}"
             download_logs(id_token, s3_bucket, s3_key, local_file_path)
