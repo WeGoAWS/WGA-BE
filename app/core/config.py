@@ -16,8 +16,6 @@ class Settings:
     # Cognito 설정
     COGNITO_DOMAIN: str = os.getenv("COGNITO_DOMAIN", "")
     COGNITO_CLIENT_ID: str = os.getenv("COGNITO_CLIENT_ID", "")
-    COGNITO_CLIENT_SECRET: str = os.getenv("COGNITO_CLIENT_SECRET", "")
-    COGNITO_REDIRECT_URI: str = os.getenv("COGNITO_REDIRECT_URI", "http://localhost:8000/auth/authorize")
     COGNITO_IDENTITY_POOL_ID: str = os.getenv("COGNITO_IDENTITY_POOL_ID", "")
     USER_POOL_ID: str = os.getenv("USER_POOL_ID", "")
 

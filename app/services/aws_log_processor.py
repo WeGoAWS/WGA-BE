@@ -1,29 +1,56 @@
-# app/services/aws_log_processor.py
 import json
-import gzip
-import botocore.exceptions
-from app.core.config import settings
-import time
-import random
-from app.services.bedrock_service import invoke_bedrock_model
+import logging
+import re
+import os
+from datetime import datetime
+from collections import defaultdict
+from tqdm import tqdm
+import boto3
+from botocore.exceptions import ClientError
+from langchain.chains import LLMChain
+from langchain_core.prompts import PromptTemplate
+from langchain_ollama import ChatOllama
+from langchain_community.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEmbeddings
+import shutil
+from datetime import datetime, timedelta
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
-# CloudTrail 로그 분석 프롬프트 템플릿
-LOG_ANALYSIS_PROMPT = """
-Analyze the following AWS CloudTrail log and determine if there are any security risks.
+# LLM 구성
+ollama_model = "deepseek-r1:7b"
+ollama_llm = ChatOllama(
+    model=ollama_model,
+    base_url="http://100.73.251.76:11434"
+)
 
-Log Data:
+# 프롬프트 설정
+log_analysis_prompt = PromptTemplate(
+    input_variables=["log_event"],
+    template="""You are a cloud security analyst reviewing AWS CloudTrail logs.
+
+Analyze the following AWS CloudTrail log event and answer the following questions in detail:
+
+Log Event:
 {log_event}
 
-- Identify potential security risks.
-- Clearly explain the risk level (Low, Medium, High).
-- Provide recommendations if needed.
-- Indicate if this event is normal or suspicious.
-- Provide a summary of the event in a short, human-readable format.
-"""
+Respond in the following JSON format:
 
-# IAM 정책 분석 프롬프트 템플릿
-POLICY_ANALYSIS_PROMPT = """
-Based on the following CloudTrail log and the user's current permissions, recommend IAM policy modifications.
+{{ 
+  "assessment": "<Brief analysis>",
+  "classification": "<Normal activity | Suspicious activity | Malicious activity>",
+  "risk_level": "<None | Low | Medium | High>",
+  "justification": "<Why this level was assigned>",
+  "recommendation": "<Action recommendation>",
+  "summary": "<One-sentence summary>"
+}}
+Only respond with a valid JSON object. Do not include any explanation outside the JSON.
+"""
+)
+
+policy_prompt = PromptTemplate(
+    input_variables=["log_event", "current_permissions", "action_context"],
+    template="""
+You are a cloud IAM policy expert. Based on the CloudTrail log, the user's current IAM permissions, and known information about AWS actions, analyze and recommend policy adjustments.
 
 CloudTrail Log:
 {log_event}
@@ -31,178 +58,151 @@ CloudTrail Log:
 Current Permissions:
 {current_permissions}
 
-- Only remove permissions if they are **clearly unnecessary** based on the log.
-- If a permission has been used multiple times, do not remove it.
-- If additional permissions are needed, provide them.
-- If the log suggests a need for more restrictive permissions, recommend policy adjustments.
-- Provide a reason for each change.
+Action Context:
+{action_context}
+You must ONLY suggest IAM permission Action strings, such as "s3:ListBucket", ...
+Do NOT include OpenID scopes, resource ARNs, roles, or unrelated strings.
+Respond in the following JSON format:
 
-Format your response exactly as:
-REMOVE: <permissions or None>
-ADD: <permissions or None>
-Reason: <Clear explanation in one sentence.>
+{{
+  "REMOVE": ["permission1", "permission2"],
+  "ADD": ["permission3"],
+  "Reason": "One-line rationale"
+}}
+
+Ensure the response is valid JSON. Do not include any explanation outside the JSON.
 """
+)
 
-def find_latest_cloudtrail_files(s3_client, bucket_name, prefix, file_count):
-    """Find latest CloudTrail log files in S3"""
-    response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
-    if "Contents" in response and response["Contents"]:
-        sorted_files = sorted(response["Contents"], key=lambda x: x["LastModified"], reverse=True)
-        latest_files = [file["Key"] for file in sorted_files[:file_count]]
-        return latest_files
-    else:
-        raise FileNotFoundError("No CloudTrail logs found in S3.")
+log_analysis_chain = log_analysis_prompt | ollama_llm
+policy_analysis_chain = policy_prompt | ollama_llm
 
-def get_cloudtrail_logs(s3_client, bucket_name, file_key):
-    """Get CloudTrail logs from S3 file"""
-    response = s3_client.get_object(Bucket=bucket_name, Key=file_key)
-    with gzip.GzipFile(fileobj=response["Body"]) as gz:
-        logs = json.loads(gz.read().decode("utf-8"))
-    return logs
-
-def get_latest_events(logs, count):
-    """Get latest events from CloudTrail logs"""
-    records = logs.get("Records", [])
-    records.sort(key=lambda x: x.get("eventTime", ""), reverse=True)
-    return records[:count]
-
-def get_user_permissions(iam_client, user_arn):
-    """Get IAM permissions for a user"""
-    if user_arn.endswith(":root"):
-        print(f"Skipping root user: {user_arn}")
-        return []
-    if ":user/" in user_arn:
-        user_name = user_arn.split("user/")[-1]
-    elif ":assumed-role/" in user_arn:
-        print(f"Skipping assumed-role: {user_arn}")
-        return []
-    else:
-        raise ValueError(f"Invalid IAM ARN format: {user_arn}")
+# FAISS 벡터스토어 로드
+def load_action_vectorstore(s3_bucket="wga-faiss-index", s3_prefix="", local_dir="/tmp/faiss_index"):
+    s3 = boto3.client("s3")
+    if os.path.exists(local_dir):
+        shutil.rmtree(local_dir)
+    os.makedirs(local_dir, exist_ok=True)
     
-    permissions = set()
-    try:
-        attached_policies = iam_client.list_attached_user_policies(UserName=user_name).get("AttachedPolicies", [])
-        for policy in attached_policies:
-            policy_arn = policy["PolicyArn"]
-            policy_version = iam_client.get_policy(PolicyArn=policy_arn)["Policy"]["DefaultVersionId"]
-            policy_document = iam_client.get_policy_version(PolicyArn=policy_arn, VersionId=policy_version)["PolicyVersion"]["Document"]
-            for statement in policy_document.get("Statement", []):
-                if "Action" in statement:
-                    actions = statement["Action"]
-                    if isinstance(actions, str):
-                        permissions.add(actions)
-                    else:
-                        permissions.update(actions)
-        inline_policies = iam_client.list_user_policies(UserName=user_name).get("PolicyNames", [])
-        for policy_name in inline_policies:
-            policy_document = iam_client.get_user_policy(UserName=user_name, PolicyName=policy_name)["PolicyDocument"]
-            for statement in policy_document.get("Statement", []):
-                if "Action" in statement:
-                    actions = statement["Action"]
-                    if isinstance(actions, str):
-                        permissions.add(actions)
-                    else:
-                        permissions.update(actions)
-    except botocore.exceptions.ClientError as e:
-        print(f"Error fetching IAM policies for {user_name}: {e}")
-        return []
-    return list(permissions)
+    response = s3.list_objects_v2(Bucket=s3_bucket, Prefix=s3_prefix)
 
-def analyze_log(log):
-    """Analyze a CloudTrail log entry using Bedrock or fallback to rule-based analysis"""
+    for obj in response.get("Contents", []):
+        key = obj["Key"]
+        filename = os.path.basename(key)
+        if not filename:
+            continue
+        local_path = os.path.join(local_dir, filename)
+        s3.download_file(s3_bucket, key, local_path)
+        logging.info(f"Downloaded FAISS index file {key} to {local_path}")
+
+    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    return FAISS.load_local(local_dir, embeddings, allow_dangerous_deserialization=True)
+
+def parsing_key(s3_bucket: str, region: str = "us-east-1") -> list[str]:
+    s3 = boto3.client("s3")
+    sts = boto3.client("sts")
+
+    account_id = sts.get_caller_identity()["Account"]
+
+    # 어제 날짜 계산
+    yesterday = datetime.utcnow().date() - timedelta(days=1)
+    prefix = f"AWSLogs/{account_id}/CloudTrail/{region}/{yesterday.strftime('%Y/%m/%d')}/"
+
+    logging.info(f"Listing S3 keys under prefix: {prefix}")
+    s3_keys = []
+
+    paginator = s3.get_paginator('list_objects_v2')
+    for page in paginator.paginate(Bucket=s3_bucket, Prefix=prefix):
+        for obj in page.get('Contents', []):
+            s3_keys.append(obj['Key'])
+
+    logging.info(f"Found {len(s3_keys)} log files for {yesterday}")
+    return s3_keys
+
+# 유사 문서 검색
+def get_action_context(query_list, vectorstore, k=3):
+    context_chunks = []
+    for query in query_list:
+        docs = vectorstore.similarity_search(query, k=k)
+        if docs:
+            context_chunks.append(f"[{query}]\n" + "\n".join([doc.page_content for doc in docs]))
+    return "\n\n".join(context_chunks)
+
+# 로그 분석
+def analyze_log(log, action_vectorstore=None):
     try:
-        # Try to use Bedrock API
-        prompt = LOG_ANALYSIS_PROMPT.format(log_event=json.dumps(log, indent=4))
-        response = invoke_bedrock_model(prompt)
-        
-        # Access the response text based on Claude API structure
-        if "content" in response and isinstance(response["content"], list) and len(response["content"]) > 0:
-            content_item = response["content"][0]
-            if "text" in content_item and content_item["type"] == "text":
-                return content_item["text"]
-        return "Analysis failed: Invalid response format"
+        raw_text = json.dumps(log, indent=4)
+        actions = re.findall(r'"eventName"\s*:\s*"(\w+)"', raw_text)
+        action_context = get_action_context(actions, action_vectorstore) if action_vectorstore else ""
+
+        response = log_analysis_chain.invoke({
+            "log_event": raw_text + ("\n\n=== Related AWS Action Info ===\n" + action_context if action_context else "")
+        })
+
+        response_text = response.content if hasattr(response, "content") else str(response)
+        json_match = re.search(r"```json\s*(\{.*?\})\s*```", response_text, re.DOTALL)
+        if not json_match:
+            json_match = re.search(r"(\{.*\"risk_level\".*\})", response_text, re.DOTALL)
+        if json_match:
+            parsed = json.loads(json_match.group(1))
+            risk_level = parsed.get("risk_level", "Unknown")
+        else:
+            parsed = None
+            risk_level = "Unknown"
     except Exception as e:
-        print(f"Error in LLM analysis: {e}")
-        
-        # Fallback to rule-based analysis if Bedrock is throttled
-        if "ThrottlingException" in str(e):
-            return rule_based_log_analysis(log)
-        
-        return f"Analysis failed: {str(e)}"
-        
-def rule_based_log_analysis(log):
-    """Fallback analysis when Bedrock API is throttled"""
-    # Extract key information from the log
-    event_name = log.get("eventName", "Unknown")
-    event_source = log.get("eventSource", "Unknown").replace(".amazonaws.com", "")
-    source_ip = log.get("sourceIPAddress", "Unknown")
-    
-    # Basic risk assessment based on event name
-    risk_level = "Low"
-    recommendations = []
-    
-    # Check for sensitive actions
-    sensitive_actions = [
-        "Create", "Delete", "Update", "Modify", "Put", "Attach", 
-        "Detach", "Enable", "Disable", "Revoke", "AuthorizeSecurityGroup"
-    ]
-    
-    if any(action in event_name for action in sensitive_actions):
-        risk_level = "Medium"
-        recommendations.append("Review this action to ensure it was authorized.")
-    
-    # Check for IAM or permission-related events
-    if "iam" in event_source.lower() or "sts" in event_source.lower():
-        risk_level = "Medium"
-        if "Policy" in event_name or "Role" in event_name or "User" in event_name:
-            risk_level = "High"
-            recommendations.append("Verify this IAM change was authorized and follows least privilege principle.")
-    
-    # Check for security-related events
-    if "security" in event_source.lower() or "guard" in event_source.lower() or "config" in event_source.lower():
-        risk_level = "Medium"
-        recommendations.append("Verify this security configuration change was authorized.")
-    
-    # Check for unusual IP addresses (simplified)
-    if source_ip not in ["internal", "aws-service", "127.0.0.1"] and not source_ip.startswith("10.") and not source_ip.startswith("192.168."):
-        recommendations.append(f"Verify that access from IP {source_ip} is expected.")
-    
-    # Determine if event seems normal or suspicious
-    event_status = "Normal" if risk_level == "Low" else "Potentially suspicious"
-    
-    # Build the response
-    analysis = f"""
-Risk assessment for event {event_name} from {event_source}:
+        response_text = f"Failed to parse response: {e}"
+        risk_level = "Unknown"
 
-- Risk Level: {risk_level}
-- Status: {event_status}
-- Summary: {event_name} was performed via {event_source}"""
-    
-    if recommendations:
-        analysis += "\n\nRecommendations:\n"
-        for i, rec in enumerate(recommendations, 1):
-            analysis += f"{i}. {rec}\n"
-    
-    return analysis
+    return {
+        "comment": response_text,
+        "risk": risk_level
+    }
 
-def analyze_policy(log, user_arn, iam_client):
-    """Analyze IAM policy based on CloudTrail log using Bedrock or fallback to rule-based analysis"""
+# IAM 정책 유효성 검사
+def is_valid_policy(json_obj):
+    required_keys = {"REMOVE", "ADD", "Reason"}
+    if not (
+        isinstance(json_obj, dict)
+        and required_keys.issubset(json_obj.keys())
+        and isinstance(json_obj["REMOVE"], list)
+        and isinstance(json_obj["ADD"], list)
+        and isinstance(json_obj["Reason"], str)
+    ):
+        return False
+
+    iam_action_pattern = re.compile(r"^[a-z0-9]+:[A-Z][a-zA-Z0-9]+$")
+    json_obj["REMOVE"] = [perm for perm in json_obj["REMOVE"] if iam_action_pattern.match(perm)]
+    json_obj["ADD"] = [perm for perm in json_obj["ADD"] if iam_action_pattern.match(perm)]
+    return True
+
+# 정책 분석
+def analyze_policy(logs, action_vectorstore=None):
     try:
-        current_permissions = get_user_permissions(iam_client, user_arn)
-        prompt = POLICY_ANALYSIS_PROMPT.format(
-            log_event=json.dumps(log, indent=4),
-            current_permissions=json.dumps(current_permissions, indent=4)
-        )
-        response = invoke_bedrock_model(prompt)
-        
-        # Access the response text based on Claude API structure
-        response_text = ""
-        if "content" in response and isinstance(response["content"], list) and len(response["content"]) > 0:
-            content_item = response["content"][0]
-            if "text" in content_item and content_item["type"] == "text":
-                response_text = content_item["text"]
-        
+        user_arn = logs[0].get("userIdentity", {}).get("arn", "unknown")
+        current_permissions = []
+
+        all_logs_text = "\n\n".join([json.dumps(log, indent=4) for log in logs])
+        actions = list({log.get("eventName", "") for log in logs if log.get("eventName")})
+        action_context = get_action_context(actions, action_vectorstore) if action_vectorstore else ""
+
+        response = policy_analysis_chain.invoke({
+            "log_event": all_logs_text,
+            "current_permissions": json.dumps(current_permissions, indent=4),
+            "action_context": action_context
+        })
+
+        response_text = response.content if hasattr(response, "content") else str(response)
         result = {"REMOVE": [], "ADD": [], "Reason": ""}
+
+        json_match = re.search(r"(\{.*\"Reason\".*\})", response_text, re.DOTALL)
+        if json_match:
+            try:
+                parsed = json.loads(json_match.group(1))
+                if is_valid_policy(parsed):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
         for line in response_text.strip().split("\n"):
             if line.startswith("REMOVE:"):
                 perms = line.replace("REMOVE:", "").strip()
@@ -214,103 +214,89 @@ def analyze_policy(log, user_arn, iam_client):
                     result["ADD"].append(perms)
             elif line.startswith("Reason:"):
                 result["Reason"] = line.replace("Reason:", "").strip()
+
+        is_valid_policy(result)
         return result
+
     except Exception as e:
         print(f"Error in policy analysis: {e}")
-        
-        # Fallback to rule-based analysis if Bedrock is throttled
-        if "ThrottlingException" in str(e):
-            return rule_based_policy_analysis(log, current_permissions)
-        
-        return {"REMOVE": [], "ADD": [], "Reason": f"Policy analysis failed: {str(e)}"}
+        return {"REMOVE": [], "ADD": [], "Reason": "Policy analysis failed."}
 
-def rule_based_policy_analysis(log, current_permissions):
-    """Fallback policy analysis when Bedrock API is throttled"""
-    result = {"REMOVE": [], "ADD": [], "Reason": ""}
-    
-    # Extract key information from the log
-    event_name = log.get("eventName", "Unknown")
-    event_source = log.get("eventSource", "Unknown").replace(".amazonaws.com", "")
-    
-    # Basic analysis based on service and action
-    service = event_source.split(".")[0] if "." in event_source else event_source
-    
-    # Map the event to likely required permissions
-    required_permission = f"{service}:{event_name}"
-    
-    # Check if user already has permissions that match the service
-    has_service_wildcard = False
-    has_specific_action = False
-    
-    for perm in current_permissions:
-        if f"{service}:*" in perm:
-            has_service_wildcard = True
-        if required_permission.lower() in perm.lower():
-            has_specific_action = True
-    
-    # Simple policy recommendations
-    if not has_service_wildcard and not has_specific_action:
-        result["ADD"].append(required_permission)
-        result["Reason"] = f"User performed {event_name} on {service} but doesn't have explicit permission for this action."
-    elif has_service_wildcard:
-        # Suggest tightening permissions if they have wildcard access
-        result["REMOVE"].append(f"{service}:*")
-        result["ADD"].append(required_permission)
-        result["Reason"] = "Replace wildcard permission with specific action permissions for better security."
-    else:
-        result["Reason"] = "Current permissions appear appropriate for the observed activity."
-    
-    return result
+# S3에서 로그 파일 다운로드
+def download_logs(bucket_name, object_key, local_file_path):
+    s3 = boto3.client('s3')
+    try:
+        s3.download_file(bucket_name, object_key, local_file_path)
+        logging.info(f"Downloaded {object_key} from {bucket_name} to {local_file_path}")
+    except ClientError as e:
+        logging.error(f"Error downloading {object_key} from {bucket_name}: {e}")
+        raise
 
-def save_analysis_to_s3(s3_client, bucket_name, file_key, analysis_results):
-    """Save analysis results to S3"""
-    s3_client.put_object(
-        Bucket=bucket_name,
-        Key=file_key,
-        Body=json.dumps(analysis_results, indent=4),
-        ContentType="application/json"
-    )
-
-def process_aws_logs(session, aws_bucket_name, aws_log_prefix, output_bucket_name, output_file_key, file_count=5, event_count=5, delay_between_calls=2):
-    """Process AWS CloudTrail logs"""
-    # Create AWS clients
-    s3_client = session.client("s3")
-    iam_client = session.client("iam")
+# S3에 분석 결과 업로드
+def upload_analysis(bucket_name, object_key, analysis_results):
+    s3 = boto3.client('s3')
+    try:
+        s3.put_object(Bucket=bucket_name, Key=object_key, Body=json.dumps(analysis_results, indent=4))
+        logging.info(f"Uploaded analysis results to {bucket_name}/{object_key}")
+    except ClientError as e:
+        logging.error(f"Error uploading to {bucket_name}/{object_key}: {e}")
+        raise
     
-    # Find and process logs
+def process_logs(s3_buckets):
     all_logs = []
-    aws_file_keys = find_latest_cloudtrail_files(s3_client, aws_bucket_name, aws_log_prefix, file_count)
-    for file_key in aws_file_keys:
-        logs = get_cloudtrail_logs(s3_client, aws_bucket_name, file_key)
-        all_logs.extend(logs.get("Records", []))
-    all_logs.sort(key=lambda x: x.get("eventTime", ""), reverse=True)
-    latest_events = all_logs[:event_count]
-    
-    # Analyze logs with rate limiting
-    analysis_results = []
-    for i, log in enumerate(latest_events):
+    output_bucket = "wga-outputbucket"
+    output_key = f"results/{(datetime.utcnow().date() - timedelta(days=1)).isoformat()}-analysis.json"
+    action_vectorstore=load_action_vectorstore()
+
+    for s3_bucket in s3_buckets:
+        s3_keys = parsing_key(s3_bucket)
+        for s3_key in s3_keys:
+            local_file_path = f"/tmp/{os.path.basename(s3_key)}"
+            download_logs(s3_bucket, s3_key, local_file_path)
+            with open(local_file_path, 'r', encoding='utf-8') as f:
+                logs = json.load(f)
+                all_logs.extend(logs)
+            os.remove(local_file_path)  
+    logging.info(f"총 로그 수: {len(all_logs)}")
+
+
+    user_date_logs = defaultdict(lambda: defaultdict(list))
+    for log in all_logs:
         user_arn = log.get("userIdentity", {}).get("arn", "unknown")
-        
-        # Add delay between API calls to avoid throttling
-        if i > 0:
-            # Add a small random jitter to the delay to prevent synchronized retries
-            jitter = random.uniform(0, 0.5)
-            time.sleep(delay_between_calls + jitter)
-            
-        security_analysis = analyze_log(log)
-        
-        # Add another delay before the second API call
-        time.sleep(delay_between_calls)
-        
-        policy_recommendation = analyze_policy(log, user_arn, iam_client)
+        event_date = log.get("eventTime", "")[:10]
+        user_date_logs[user_arn][event_date].append(log)
+
+    analysis_results = []
+
+    for user_arn, date_logs in tqdm(user_date_logs.items(), desc="사용자별 로그 분석 진행"):
+        if user_arn == "unknown":
+            continue
+        for date_str, logs in tqdm(date_logs.items(), desc=f"{user_arn}의 날짜별 분석", leave=False):
+            logging.info(f"Processing {len(logs)} log(s) for user '{user_arn}' on {date_str}")
+            combined_log_text = "\n\n".join([json.dumps(log, indent=4) for log in logs])
+            security_analysis = analyze_log({"log_event": combined_log_text}, action_vectorstore=action_vectorstore)
+            policy_recommendation = analyze_policy(logs, action_vectorstore=action_vectorstore)
+            analysis_results.append({
+                "date": date_str,
+                "user": user_arn,
+                "log_count": len(logs),
+                "analysis_timestamp": datetime.utcnow().isoformat() + "Z",
+                "analysis_comment": security_analysis["comment"],
+                "risk_level": security_analysis["risk"],
+                "policy_recommendation": policy_recommendation
+            })
+
+    if all_logs:
+        logging.info(f"Processing global summary for {len(all_logs)} log(s)...")
+        combined_all_text = "\n\n".join([json.dumps(log, indent=4) for log in all_logs])
+        full_day_summary = analyze_log({"log_event": combined_all_text}, action_vectorstore=action_vectorstore)
         analysis_results.append({
-            "log_event": log,
-            "user_arn": user_arn,
-            "analysis_comment": security_analysis,
-            "policy_recommendation": policy_recommendation
+            "type": "daily_global_summary",
+            "log_count": len(all_logs),
+            "analysis_timestamp": datetime.utcnow().isoformat() + "Z",
+            "analysis_comment": full_day_summary["comment"],
+            "risk_level": full_day_summary["risk"]
         })
-    
-    # Save results to S3
-    save_analysis_to_s3(s3_client, output_bucket_name, output_file_key, analysis_results)
-    
+
+    upload_analysis(output_bucket, output_key, analysis_results)
     return analysis_results

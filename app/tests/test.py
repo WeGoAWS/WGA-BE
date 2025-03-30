@@ -13,6 +13,17 @@ async def test_s3_access(request: Request):
         raise HTTPException(status_code=401, detail="User not logged in.")
     
     session = aws_service.get_aws_session(id_token)
+
+    sts = session.client("sts")
+    print(sts.get_caller_identity())
+
+    s3 = session.client('s3')
+    print(s3.list_buckets())
+    iam = session.client('iam')
+    print(iam.list_roles())
+    cloudtrail = session.client('cloudtrail')
+    print(cloudtrail.describe_trails())
+
     s3_client = session.client("s3")
     
     # 특정 CloudTrail 버킷에만 접근 테스트
@@ -276,3 +287,62 @@ async def debug_session(request: Request):
     session_id = request.cookies.get('session')
     print(f"Session ID during debug: {session_id}")
     return {"session_data": dict(request.session)}
+
+@router.get("/demo")
+async def demo(request: Request):
+    analysis_data = [
+        {
+            "date": "2025-03-21",
+            "user": "arn:aws:sts::863518424796:assumed-role/ML_dataset_role18",
+            "log_count": 22,
+            "risk_classification": "Normal",
+            "severity": "Low",
+            "summary": "The aggregated activity for the assumed role showed normal monitoring and resource management without any signs of security concerns.",
+            "policy_recommendation": {
+                "REMOVE": [],
+                "ADD": [],
+                "Reason": "The activities observed in the logs align with expected AWS API calls, and there are no anomalies suggesting missing permissions. All permissions used are necessary for the described actions."
+            }
+        },
+        {
+            "date": "2025-03-21",
+            "user": "arn:aws:sts::863518424796:assumed-role/ML_dataset_role6",
+            "log_count": 40,
+            "risk_classification": "Normal",
+            "severity": "Low",
+            "summary": "The user is conducting normal security operations using assumed roles to trigger S3 actions and RDS setup with proper IAM configuration and MFA enabled.",
+            "policy_recommendation": {
+                "REMOVE": [],
+                "ADD": [],
+                "Reason": ""
+            }
+        },
+        {
+            "date": "2025-03-21",
+            "user": "arn:aws:sts::863518424796:assumed-role/ML_dataset_role5",
+            "log_count": 31,
+            "risk_classification": "Normal",
+            "severity": "Low",
+            "summary": "The user appears to be performing normal AWS administrative tasks, including bucket management and event listing, with no immediate security concerns.",
+            "policy_recommendation": {
+                "REMOVE": [],
+                "ADD": [],
+                "Reason": "The only permission listed is already used twice, and there's no indication of needing additional permissions."
+            }
+        },
+        {
+            "date": "2025-03-21",
+            "user": "arn:aws:sts::863518424796:assumed-role/ML_dataset_role10",
+            "log_count": 36,
+            "risk_classification": "Normal",
+            "severity": "Low",
+            "summary": "The aggregated activity for the user appears normal, involving legitimate key deletion and Lambda function access without any signs of misconfiguration or unauthorized behavior.",
+            "policy_recommendation": {
+                "REMOVE": [],
+                "ADD": [],
+                "Reason": "The required permissions for creating functions and listing function versions were correctly used in all observed activities. No unnecessary permissions are evident, and no additional permissions are needed based on the logs."
+            }
+        }
+    ]
+
+    return JSONResponse(content=analysis_data)

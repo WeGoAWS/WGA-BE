@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
-from app.api.api_v1.endpoints import user, bedrock, auth, cloudtrail, gcp, azure, policy_recommendation
+from app.api.api_v1.endpoints import bedrock, auth, cloudtrail, gcp, azure, policy_recommendation
 from app.tests import test
 
 app = FastAPI(title="Multi-Cloud Logs Analysis")
@@ -14,7 +14,6 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allo
 app.add_middleware(SessionMiddleware, secret_key="temporary_secret_key_1234567890", max_age=86400)
 
 # 엔드포인트 등록
-app.include_router(user.router, prefix="/users", tags=["Users"])
 app.include_router(bedrock.router, prefix="/bedrock", tags=["Bedrock"])
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(test.router, prefix="/test", tags=["Test"])

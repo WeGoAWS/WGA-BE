@@ -22,6 +22,7 @@ def get_aws_session(id_token: str):
     # datetime 객체를 ISO 포맷 문자열로 변환
     if "Expiration" in creds and isinstance(creds["Expiration"], (datetime.datetime,)):
         creds["Expiration"] = creds["Expiration"].isoformat()
+
     session = boto3.Session(
         aws_access_key_id=creds["AccessKeyId"],
         aws_secret_access_key=creds["SecretKey"],
@@ -29,3 +30,30 @@ def get_aws_session(id_token: str):
         region_name=settings.AWS_REGION,
     )
     return session
+
+def get_active_cloudtrail_s3_buckets(id_token: str) -> list:
+    if not id_token:
+        raise HTTPException(status_code=401, detail="User not logged in.")
+
+    session = get_aws_session(id_token)
+    cloudtrail_client = session.client("cloudtrail")
+
+    try:
+        trails = cloudtrail_client.describe_trails().get("trailList", [])
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"CloudTrail access error: {str(e)}")
+
+    active_buckets = []
+    for trail in trails:
+        s3_bucket = trail.get("S3BucketName")
+        if s3_bucket:
+            try:
+                # 각 트레일의 상태를 확인하여 로깅이 활성화되어 있는지 체크
+                status = cloudtrail_client.get_trail_status(Name=trail.get("Name"))
+                if status.get("IsLogging"):
+                    active_buckets.append(s3_bucket)
+            except Exception:
+                # 개별 트레일 상태 조회 실패 시 해당 트레일은 건너뜁니다.
+                continue
+
+    return active_buckets

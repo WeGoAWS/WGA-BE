@@ -29,3 +29,15 @@ azure-mgmt-resource
 
 # 유틸리티
 pydantic
+
+# aws_log_processor
+botocore
+tqdm
+langchain
+langchain-community
+langchain-core
+langchain-ollama
+langchain-huggingface
+faiss-cpu
+transformers
+torch
