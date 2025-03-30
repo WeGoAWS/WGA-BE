@@ -48,7 +48,4 @@ async def analyze_cloudtrail_logs(request: Request):
         result = process_logs(id_token, s3_bucket)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"로그 분석 실패: {str(e)}")
-    return JSONResponse(content=jsonable_encoder({
-        "message": "CloudTrail 로그 분석이 성공적으로 완료되었습니다.",
-        "result": result
-    }))
+    return JSONResponse(content=result)
