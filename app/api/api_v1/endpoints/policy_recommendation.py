@@ -8,33 +8,60 @@ from app.models.policy_recommendation import PolicyUpdates, AnalysisResultList
 
 router = APIRouter()
 
-@router.post("/process-multiple-analyses")
-async def process_multiple_analyses(
-    request: Request,
-    analysis_results: AnalysisResultList = Body(..., description="파이프라인에서 받은 여러 로그 분석 결과")
-):
+@router.get("/process-multiple-analyses")
+async def process_multiple_analyses(request: Request):
     """
     여러 분석 결과를 한 번에 처리합니다.
+    S3 버킷 'wga-outputbucket'의 results 폴더에서 가장 최신 JSON 파일을 불러와서 처리합니다.
     """
     # 인증 확인
     id_token = request.session.get("id_token")
     if not id_token:
         raise HTTPException(status_code=401, detail="인증이 필요합니다.")
-    
+    session = get_aws_session(id_token)
+    s3 = session.client("s3")
+    bucket_name = "wga-outputbucket"
+    prefix = "results/"
+
+    try:
+        response = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"S3 버킷 접근 중 오류 발생: {str(e)}")
+
+    if 'Contents' not in response or not response['Contents']:
+        raise HTTPException(status_code=404, detail="결과 파일이 존재하지 않습니다.")
+
+    # 최신 파일 선택 (LastModified 기준)
+    latest_file = max(response['Contents'], key=lambda x: x['LastModified'])
+    latest_key = latest_file['Key']
+
+    try:
+        obj = s3.get_object(Bucket=bucket_name, Key=latest_key)
+        file_content = obj['Body'].read()
+        analysis_results_data = json.loads(file_content)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"파일 불러오기 실패: {str(e)}")
+
     processed_results = []
     
-    for result in analysis_results.results:
-        processed_result = {
-            "date": result.date,
-            "user": result.user,
-            "log_count": result.log_count,
-            "analysis_timestamp": result.analysis_timestamp,
-            "analysis_comment": result.get_summary(),
-            "add_permissions": result.get_add_permissions(),
-            "policy_recommendation": result.policy_recommendation
-        }
-        processed_results.append(processed_result)
-    
+    # JSON 데이터가 리스트 형태일 경우 각 항목을 처리합니다.
+    if isinstance(analysis_results_data, list):
+        for result in analysis_results_data:
+            processed_result = {
+                "date": result.get("date"),
+                "user": result.get("user"),
+                "log_count": result.get("log_count"),
+                "analysis_timestamp": result.get("analysis_timestamp"),
+                "analysis_comment": result.get("analysis_comment"),
+                "risk_level": result.get("risk_level"),
+                "policy_recommendation": result.get("policy_recommendation"),
+                "type": result.get("type")  # daily_global_summary 등 추가 정보가 있을 수 있음
+            }
+            processed_results.append(processed_result)
+    else:
+        # JSON 데이터 구조가 예상과 다른 경우 예외 처리합니다.
+        raise HTTPException(status_code=400, detail="JSON 구조가 예상과 다릅니다.")
+
     return JSONResponse(content=jsonable_encoder(processed_results))
 
 @router.post("/apply-policy-changes")
