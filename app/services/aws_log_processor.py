@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 ollama_model = "deepseek-r1:7b"
 ollama_llm = ChatOllama(
     model=ollama_model,
-    base_url="http://100.73.251.76:11434"
+    base_url="http://localhost:11434"
 )
 
 # 프롬프트 설정
